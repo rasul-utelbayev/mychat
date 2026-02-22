@@ -3,6 +3,7 @@ import os, base64, json, hashlib
 from groq import Groq
 
 client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+histories = {}
 app = Flask(__name__)
 app.secret_key = "termux_ai_secret_2024"
 
@@ -118,7 +119,11 @@ def index():
 
 @app.route('/chat', methods=['POST'])
 def chat():
+    if 'user' not in session:
+        return jsonify({"reply": "Kiring!"})
+    username = session['user']
     msg = request.json['msg']
+    history = load_history(username)
     history.append({"role": "user", "content": msg})
     r = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
@@ -126,6 +131,7 @@ def chat():
     )
     reply = r.choices[0].message.content
     history.append({"role": "assistant", "content": reply})
+    save_history(username, history)
     return jsonify({"reply": reply})
 
 @app.route('/image', methods=['POST'])
