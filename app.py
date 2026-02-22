@@ -1,15 +1,14 @@
-from flask import Flask, request, jsonify, render_template_string
-import os, base64
+from flask import Flask, request, jsonify, render_template_string, session
+import os, base64, json, hashlib
 from groq import Groq
 
-with open(os.path.expanduser("~/.env")) as f:
-    for line in f:
-        key, val = line.strip().split("=")
-        os.environ[key] = val
-
-client = Groq(api_key=os.environ["GROQ_API_KEY"])
+client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 app = Flask(__name__)
-history = []
+app.secret_key = "termux_ai_secret_2024"
+
+USERS_FILE = os.path.expanduser("~/users.json")
+CHATS_DIR = os.path.expanduser("~/chats")
+os.makedirs(CHATS_DIR, exist_ok=True)
 
 HTML = """
 <!DOCTYPE html>
