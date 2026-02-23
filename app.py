@@ -72,8 +72,9 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ok, not_subbed = await check_sub(ctx.bot, user.id)
     if not ok:
         keyboard = [[InlineKeyboardButton(f"📢 Obuna bo'lish", url=ch["link"])] for ch in not_subbed]
+        keyboard.append([InlineKeyboardButton("🔄 Obuna bo'ldim — Tekshirish", callback_data="check_sub")])
         await update.message.reply_text(
-            "⚠️ Botdan foydalanish uchun kanallarga obuna bo'ling!",
+            "⚠️ Botdan foydalanish uchun kanallarga obuna bo'ling!\n\nObuna bo'lgach 🔄 tugmasini bosing.",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return
@@ -155,6 +156,24 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "🎬 Kino/serial olish uchun 4 xonali kod yuboring.\nMasalan: `2738`",
         parse_mode="Markdown"
     )
+
+async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user = query.from_user
+    add_user(user)
+
+    if query.data == "check_sub":
+        ok, not_subbed = await check_sub(ctx.bot, user.id)
+        if ok:
+            await query.edit_message_text("✅ Obuna tasdiqlandi! Endi kod yuboring.")
+        else:
+            keyboard = [[InlineKeyboardButton("📢 Obuna bo'lish", url=ch["link"])] for ch in not_subbed]
+            keyboard.append([InlineKeyboardButton("🔄 Tekshirish", callback_data="check_sub")])
+            await query.edit_message_text(
+                "❌ Hali obuna bo'lmadingiz!\n\nObuna bo'lgach 🔄 tugmasini bosing.",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
 
 async def handle_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     global bot_instance
@@ -283,9 +302,9 @@ tr:hover td{background:#1f2d50}
 <h2>🎬 Kinolar</h2>
 {% if movies %}
 <table>
-<tr><th>Kod</th><th>Nomi</th><th>Sana</th></tr>
+<tr><th>Kod</th><th>Nomi</th><th>Sana</th><th></th></tr>
 {% for code, m in movies %}
-<tr><td><span class="code">{{ code }}</span></td><td>{{ m.name }}</td><td>{{ m.date }}</td></tr>
+<tr><td><span class="code">{{ code }}</span></td><td>{{ m.name }}</td><td>{{ m.date }}</td><td><button class="btn btn-del" onclick="delMovie('{{ code }}')">🗑</button></td></tr>
 {% endfor %}
 </table>
 {% else %}<div class="empty">😴 Hali kino yo'q</div>{% endif %}
@@ -293,9 +312,9 @@ tr:hover td{background:#1f2d50}
 <h2>📺 Seryallar</h2>
 {% if serials %}
 <table>
-<tr><th>Kod</th><th>Nomi</th><th>Qismlar</th><th>Sana</th></tr>
+<tr><th>Kod</th><th>Nomi</th><th>Qismlar</th><th>Sana</th><th></th></tr>
 {% for code, s in serials %}
-<tr><td><span class="code">{{ code }}</span></td><td>{{ s.name }}</td><td><span class="badge">{{ s.episodes|length }}</span></td><td>{{ s.date }}</td></tr>
+<tr><td><span class="code">{{ code }}</span></td><td>{{ s.name }}</td><td><span class="badge">{{ s.episodes|length }}</span></td><td>{{ s.date }}</td><td><button class="btn btn-del" onclick="delSerial('{{ code }}')">🗑</button></td></tr>
 {% endfor %}
 </table>
 {% else %}<div class="empty">😴 Hali serial yo'q</div>{% endif %}
@@ -321,6 +340,16 @@ fetch('/add_channel',{method:'POST',headers:{'Content-Type':'application/json'},
 function delChannel(id){
 if(!confirm('Ochirasizmi?'))return;
 fetch('/del_channel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})})
+.then(r=>r.json()).then(d=>{if(d.ok)location.reload()})
+}
+function delMovie(code){
+if(!confirm('Kinoni ochirasizmi?'))return;
+fetch('/del_movie',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code})})
+.then(r=>r.json()).then(d=>{if(d.ok)location.reload()})
+}
+function delSerial(code){
+if(!confirm('Serialni ochirasizmi?'))return;
+fetch('/del_serial',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code})})
 .then(r=>r.json()).then(d=>{if(d.ok)location.reload()})
 }
 function logout(){fetch('/logout').then(()=>location.reload())}
@@ -381,6 +410,20 @@ def del_channel():
     channels.pop(request.json.get("id"), None)
     return {"ok": True}
 
+@flask_app.route("/del_movie", methods=["POST"])
+def del_movie():
+    if not session.get("admin"):
+        return {"ok": False}
+    movies.pop(request.json.get("code"), None)
+    return {"ok": True}
+
+@flask_app.route("/del_serial", methods=["POST"])
+def del_serial():
+    if not session.get("admin"):
+        return {"ok": False}
+    serials.pop(request.json.get("code"), None)
+    return {"ok": True}
+
 @flask_app.route("/health")
 def health():
     return "OK", 200
@@ -394,6 +437,8 @@ def run_bot():
         bot_instance = bot_app.bot
         bot_app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
         bot_app.add_handler(MessageHandler(filters.TEXT, handle_message))
+        from telegram.ext import CallbackQueryHandler
+        bot_app.add_handler(CallbackQueryHandler(handle_callback))
         print("Bot ishlamoqda... 🎬📺")
         await bot_app.initialize()
         await bot_app.start()
