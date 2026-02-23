@@ -96,7 +96,7 @@ async def handle_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"Assalomu alaykum, *{user.first_name}*! 👋\n"
         f"🎬 *RasuFilmBot* ga xush kelibsiz!\n\n"
         f"Bu bot orqali siz:\n"
-        f"🎥 TikTok, Instagram va YouTube videolarini yuklab olishingiz\n"
+        f"🎥 YouTube va TikTok videolarini yuklab olishingiz\n"
         f"🔗 Video link orqali tezkor download qilishingiz\n"
         f"🎞 Kino kod orqali film topishingiz\n"
         f"📩 So'rov bo'yicha kino olishingiz mumkin\n\n"
@@ -204,7 +204,7 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     # Video link tekshirish
-    if any(x in text for x in ["youtube.com", "youtu.be", "tiktok.com", "instagram.com"]):
+    if any(x in text for x in ["youtube.com", "youtu.be", "tiktok.com"]):
         msg = await update.message.reply_text("⏳ Video yuklanmoqda, kuting...")
         try:
             data, title = await asyncio.get_event_loop().run_in_executor(None, lambda: asyncio.run(download_video(text)))
