@@ -96,33 +96,12 @@ async def handle_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"Assalomu alaykum, *{user.first_name}*! 👋\n"
         f"🎬 *RasuFilmBot* ga xush kelibsiz!\n\n"
         f"Bu bot orqali siz:\n"
-        f"🎥 YouTube va TikTok videolarini yuklab olishingiz\n"
-        f"🔗 Video link orqali tezkor download qilishingiz\n"
         f"🎞 Kino kod orqali film topishingiz\n"
-        f"📩 So'rov bo'yicha kino olishingiz mumkin\n\n"
-        f"▶️ Boshlash uchun link yoki kod yuboring!",
+        f"📺 Serial kod orqali serial ko'rishingiz\n"
+        f"📌 Kodlarni ijtimoiy tarmoqlarimizdan topishingiz mumkin\n\n"
+        f"▶️ Boshlash uchun kino kodini yuboring!",
         parse_mode="Markdown"
     )
-
-async def download_video(url):
-    import yt_dlp, tempfile, os
-    with tempfile.TemporaryDirectory() as tmpdir:
-        ydl_opts = {
-            "outtmpl": os.path.join(tmpdir, "%(title)s.%(ext)s"),
-            "format": "best[filesize<50M]/best",
-            "quiet": True,
-            "no_warnings": True,
-        }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            title = info.get("title", "Video")
-            files = os.listdir(tmpdir)
-            if files:
-                filepath = os.path.join(tmpdir, files[0])
-                with open(filepath, "rb") as f:
-                    data = f.read()
-                return data, title
-    return None, None
 
 async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     global bot_instance
@@ -201,25 +180,6 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_video(video=ep["file_id"], caption=f"📺 *{serial['name']}* — {ep['ep']}", parse_mode="Markdown")
         else:
             await update.message.reply_text("❌ Bunday kod topilmadi!")
-        return
-
-    # Video link tekshirish
-    if any(x in text for x in ["youtube.com", "youtu.be", "tiktok.com"]):
-        msg = await update.message.reply_text("⏳ Video yuklanmoqda, kuting...")
-        try:
-            data, title = await asyncio.get_event_loop().run_in_executor(None, lambda: asyncio.run(download_video(text)))
-            if data:
-                import io
-                await update.message.reply_video(
-                    video=io.BytesIO(data),
-                    caption=f"✅ *{title}*\n\n🤖 @rasufilmbot",
-                    parse_mode="Markdown"
-                )
-                await msg.delete()
-            else:
-                await msg.edit_text("❌ Video yuklab bo'lmadi. Link to'g'rimi?")
-        except Exception as e:
-            await msg.edit_text("❌ Xato yuz berdi. Link to'g'rimi?")
         return
 
     # Yo'riqnoma xabari
