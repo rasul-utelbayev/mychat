@@ -2,24 +2,33 @@ import os
 import random
 import threading
 import asyncio
-from datetime import datetime
-from flask import Flask, render_template_string, request, redirect, session
+from datetime import datetime, timedelta
+from flask import Flask, render_template_string, request, session
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
+from telegram.ext import ApplicationBuilder, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
 TOKEN = os.environ.get("tele_api")
 ADMIN_USERNAME = "Rasul_utelbayev"
 WEB_PASSWORD = "rAsuto2008"
 
+# Ijtimoiy tarmoq linklari (keyinroq o'zgartirasiz)
+SOCIAL_LINKS = {
+    "telegram": "https://t.me/rasuto",
+    "tiktok": "https://tiktok.com/@rasuto",
+    "instagram": "https://instagram.com/rasuto",
+    "youtube": "https://youtube.com/@rasuto"
+}
+
 # ── Ma'lumotlar ───────────────────────────────────────────────────────────────
-movies = {}       # {kod: {file_id, name, date}}
-serials = {}      # {kod: {name, episodes: [{file_id, ep}], date}}
-channels = {}     # {ch_id: {link, is_admin, subscribers}}
+movies = {}
+serials = {}
+# channel: {link, is_admin, subscribers, limit_type, limit_value}
+# limit_type: "none" | "time" | "subscribers"
+# limit_value: sana (time uchun) yoki son (subscribers uchun)
+channels = {}
 stats = {"users": {}, "total_requests": 0, "started": datetime.now().strftime("%Y-%m-%d %H:%M")}
-
-waiting_movie = {}   # {user_id: True}
-waiting_serial = {}  # {user_id: {name: None, episodes: [], step: "name"|"episodes"}}
-
+waiting_movie = {}
+waiting_serial = {}
 bot_loop = None
 bot_instance = None
 
@@ -39,11 +48,27 @@ def gen_code():
         if code not in movies and code not in serials:
             return code
 
+def is_channel_active(ch):
+    lt = ch.get("limit_type", "none")
+    if lt == "none":
+        return True
+    elif lt == "time":
+        end = ch.get("limit_value")
+        if end:
+            return datetime.now() < datetime.fromisoformat(end)
+        return True
+    elif lt == "subscribers":
+        needed = int(ch.get("limit_value", 0))
+        return ch.get("subscribers", 0) < needed
+    return True
+
 async def check_sub(bot, user_id):
     if not channels:
         return True, []
     not_subbed = []
     for ch_id, ch in channels.items():
+        if not is_channel_active(ch):
+            continue
         try:
             m = await bot.get_chat_member(ch_id, user_id)
             if m.status not in ["member", "administrator", "creator"]:
@@ -68,7 +93,6 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip() if update.message.text else ""
     add_user(user)
 
-    # Obuna tekshirish
     ok, not_subbed = await check_sub(ctx.bot, user.id)
     if not ok:
         keyboard = [[InlineKeyboardButton(f"📢 Obuna bo'lish", url=ch["link"])] for ch in not_subbed]
@@ -81,19 +105,14 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     is_admin = user.username == ADMIN_USERNAME
 
-    # Admin: serial nomi kutilmoqda
     if is_admin and user.id in waiting_serial:
         ws = waiting_serial[user.id]
         if ws["step"] == "name":
             ws["name"] = text
             ws["step"] = "episodes"
-            await update.message.reply_text(
-                f"✅ Nom: *{text}*\n\nEndi 1-qismni yuboring (caption = ixtiyoriy):",
-                parse_mode="Markdown"
-            )
+            await update.message.reply_text(f"✅ Nom: *{text}*\n\nEndi 1-qismni yuboring:", parse_mode="Markdown")
             return
 
-    # Admin buyruqlar
     if is_admin:
         if text.lower() == "kino":
             waiting_movie[user.id] = True
@@ -107,54 +126,44 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             ws = waiting_serial[user.id]
             if ws["episodes"]:
                 code = gen_code()
-                serials[code] = {
-                    "name": ws["name"] or "Nomsiz serial",
-                    "episodes": ws["episodes"],
-                    "date": datetime.now().strftime("%Y-%m-%d %H:%M")
-                }
+                serials[code] = {"name": ws["name"] or "Nomsiz", "episodes": ws["episodes"], "date": datetime.now().strftime("%Y-%m-%d %H:%M")}
                 del waiting_serial[user.id]
-                await update.message.reply_text(
-                    f"✅ *{serials[code]['name']}* saqlandi!\n"
-                    f"📺 {len(ws['episodes'])} ta qism\n"
-                    f"📌 Kod: `{code}`",
-                    parse_mode="Markdown"
-                )
+                await update.message.reply_text(f"✅ *{serials[code]['name']}* saqlandi!\n📺 {len(ws['episodes'])} ta qism\n📌 Kod: `{code}`", parse_mode="Markdown")
             else:
                 del waiting_serial[user.id]
-                await update.message.reply_text("❌ Qism yuklanmadi, bekor qilindi.")
+                await update.message.reply_text("❌ Bekor qilindi.")
             return
 
-    # Foydalanuvchi: kod
     if text.isdigit() and len(text) == 4:
         stats["total_requests"] += 1
         stats["users"][str(user.id)]["requests"] += 1
-
         if text in movies:
             movie = movies[text]
-            await update.message.reply_video(
-                video=movie["file_id"],
-                caption=f"🎬 *{movie['name']}*",
-                parse_mode="Markdown"
-            )
+            await update.message.reply_video(video=movie["file_id"], caption=f"🎬 *{movie['name']}*", parse_mode="Markdown")
         elif text in serials:
             serial = serials[text]
-            await update.message.reply_text(
-                f"📺 *{serial['name']}*\n{len(serial['episodes'])} ta qism yuklanmoqda...",
-                parse_mode="Markdown"
-            )
+            await update.message.reply_text(f"📺 *{serial['name']}*\n{len(serial['episodes'])} ta qism yuklanmoqda...", parse_mode="Markdown")
             for ep in serial["episodes"]:
-                await update.message.reply_video(
-                    video=ep["file_id"],
-                    caption=f"📺 *{serial['name']}* — {ep['ep']}",
-                    parse_mode="Markdown"
-                )
+                await update.message.reply_video(video=ep["file_id"], caption=f"📺 *{serial['name']}* — {ep['ep']}", parse_mode="Markdown")
         else:
             await update.message.reply_text("❌ Bunday kod topilmadi!")
         return
 
+    # Yo'riqnoma xabari
+    tg = SOCIAL_LINKS["telegram"]
+    tt = SOCIAL_LINKS["tiktok"]
+    ig = SOCIAL_LINKS["instagram"]
+    yt = SOCIAL_LINKS["youtube"]
     await update.message.reply_text(
-        "🎬 Kino/serial olish uchun 4 xonali kod yuboring.\nMasalan: `2738`",
-        parse_mode="Markdown"
+        "🎬 *Kino/serial olish uchun 4 xonali kod yuboring.*\n\n"
+        "📌 Kodlarni qayerdan topasiz?\n\n"
+        f"📱 [Telegram]({tg})\n"
+        f"🎵 [TikTok]({tt})\n"
+        f"📸 [Instagram]({ig})\n"
+        f"▶️ [YouTube]({yt})\n\n"
+        "Profilimizga kiring va kino kodlarini toping! 🍿",
+        parse_mode="Markdown",
+        disable_web_page_preview=True
     )
 
 async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -166,7 +175,7 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if query.data == "check_sub":
         ok, not_subbed = await check_sub(ctx.bot, user.id)
         if ok:
-            await query.edit_message_text("✅ Obuna tasdiqlandi! Endi kod yuboring.")
+            await query.edit_message_text("✅ Obuna tasdiqlandi! Endi kino kodini yuboring.")
         else:
             keyboard = [[InlineKeyboardButton("📢 Obuna bo'lish", url=ch["link"])] for ch in not_subbed]
             keyboard.append([InlineKeyboardButton("🔄 Tekshirish", callback_data="check_sub")])
@@ -181,66 +190,37 @@ async def handle_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.username != ADMIN_USERNAME:
         return
-
     video = update.message.video or update.message.document
     if not video:
         return
-
-    # Kino saqlash
     if user.id in waiting_movie:
         name = update.message.caption or "Nomsiz"
         code = gen_code()
         movies[code] = {"file_id": video.file_id, "name": name, "date": datetime.now().strftime("%Y-%m-%d %H:%M")}
         del waiting_movie[user.id]
-        await update.message.reply_text(
-            f"✅ Kino saqlandi!\n🎬 *{name}*\n📌 Kod: `{code}`",
-            parse_mode="Markdown"
-        )
+        await update.message.reply_text(f"✅ Kino saqlandi!\n🎬 *{name}*\n📌 Kod: `{code}`", parse_mode="Markdown")
         return
-
-    # Serial qism saqlash
     if user.id in waiting_serial and waiting_serial[user.id]["step"] == "episodes":
         ws = waiting_serial[user.id]
         ep_num = len(ws["episodes"]) + 1
         ws["episodes"].append({"file_id": video.file_id, "ep": f"Qism {ep_num}"})
         await update.message.reply_text(
-            f"✅ *Qism {ep_num}* saqlandi!\n\nDavom etasizmi? Keyingi qismni yuboring.\n"
-            f"Tugatish uchun: `tugatish`",
+            f"✅ *Qism {ep_num}* saqlandi!\n\nDavom etasizmi? Keyingi qismni yuboring.\nTugatish: `tugatish`",
             parse_mode="Markdown"
         )
-        return
 
-# ── Admin panel HTML ──────────────────────────────────────────────────────────
-LOGIN_HTML = """
-<!DOCTYPE html><html><head>
+# ── Admin panel ───────────────────────────────────────────────────────────────
+LOGIN_HTML = """<!DOCTYPE html><html><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Admin Login</title>
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{background:#0d0d1a;color:#fff;font-family:'Segoe UI',sans-serif;display:flex;justify-content:center;align-items:center;height:100vh}
-.box{background:#16213e;padding:40px 30px;border-radius:20px;width:100%;max-width:360px}
-h2{color:#e94560;text-align:center;margin-bottom:25px}
-input{width:100%;padding:12px;margin:8px 0;border-radius:10px;border:1px solid #0f3460;background:#0d0d1a;color:#fff;font-size:15px;outline:none}
-input:focus{border-color:#e94560}
-button{width:100%;padding:13px;margin-top:10px;border-radius:10px;border:none;background:#e94560;color:#fff;font-size:15px;font-weight:600;cursor:pointer}
-.err{color:#ff6b6b;text-align:center;margin-top:10px;font-size:14px}
-</style></head><body>
-<div class="box">
-<h2>🤖 Admin Panel</h2>
+<title>Admin</title>
+<style>*{box-sizing:border-box;margin:0;padding:0}body{background:#0d0d1a;color:#fff;font-family:'Segoe UI',sans-serif;display:flex;justify-content:center;align-items:center;height:100vh}.box{background:#16213e;padding:40px 30px;border-radius:20px;width:100%;max-width:360px}h2{color:#e94560;text-align:center;margin-bottom:25px}input{width:100%;padding:12px;margin:8px 0;border-radius:10px;border:1px solid #0f3460;background:#0d0d1a;color:#fff;font-size:15px;outline:none}input:focus{border-color:#e94560}button{width:100%;padding:13px;margin-top:10px;border-radius:10px;border:none;background:#e94560;color:#fff;font-size:15px;font-weight:600;cursor:pointer}.err{color:#ff6b6b;text-align:center;margin-top:10px;font-size:14px}</style></head><body>
+<div class="box"><h2>🤖 Admin Panel</h2>
 <input type="password" id="p" placeholder="Parol" onkeydown="if(event.key==='Enter')login()">
-<button onclick="login()">Kirish</button>
-<div class="err" id="err"></div>
-</div>
-<script>
-function login(){
-fetch('/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:document.getElementById('p').value})})
-.then(r=>r.json()).then(d=>{if(d.ok)location.reload();else document.getElementById('err').innerText="Parol noto'g'ri!"})
-}
-</script></body></html>
-"""
+<button onclick="login()">Kirish</button><div class="err" id="err"></div></div>
+<script>function login(){fetch('/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:document.getElementById('p').value})}).then(r=>r.json()).then(d=>{if(d.ok)location.reload();else document.getElementById('err').innerText="Parol noto'g'ri!"})}</script>
+</body></html>"""
 
-ADMIN_HTML = """
-<!DOCTYPE html><html><head>
+ADMIN_HTML = """<!DOCTYPE html><html><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Kino Bot Admin</title>
 <style>
@@ -256,14 +236,17 @@ td{padding:10px 12px;border-bottom:1px solid #0f3460;font-size:13px}tr:last-chil
 tr:hover td{background:#1f2d50}
 .badge{background:#e94560;color:#fff;padding:2px 8px;border-radius:10px;font-size:11px}
 .code{background:#0f3460;color:#4fc3f7;padding:2px 8px;border-radius:6px;font-family:monospace}
-.ok{color:#4caf50;font-weight:600}.no{color:#ff6b6b;font-weight:600}
-.btn{background:#e94560;border:none;color:#fff;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:13px;margin-right:8px;margin-bottom:10px}
-.btn-del{background:#333}
-.row{display:flex;gap:8px;margin-bottom:15px;flex-wrap:wrap}
-.row input{flex:1;min-width:150px;padding:10px;border-radius:8px;border:1px solid #0f3460;background:#0d0d1a;color:#fff;font-size:14px;outline:none}
-.row input:focus{border-color:#e94560}
+.ok{color:#4caf50;font-weight:600}.no{color:#ff6b6b;font-weight:600}.warn{color:#ff9800;font-weight:600}
+.btn{background:#e94560;border:none;color:#fff;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:13px;margin-right:6px;margin-bottom:8px}
+.btn-del{background:#333}.btn-green{background:#2e7d32}
+.row{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+.row input,.row select{flex:1;min-width:120px;padding:10px;border-radius:8px;border:1px solid #0f3460;background:#0d0d1a;color:#fff;font-size:13px;outline:none}
+.row input:focus,.row select:focus{border-color:#e94560}
 .empty{text-align:center;padding:30px;color:#a0a0b0}
 .logout{float:right;background:transparent;border:1px solid #e94560;color:#e94560;padding:6px 12px;border-radius:8px;cursor:pointer;font-size:13px}
+.section{background:#16213e;border-radius:12px;padding:15px;margin-bottom:15px}
+input[type=text],input[type=datetime-local],input[type=number]{background:#0d0d1a;border:1px solid #0f3460;color:#fff;border-radius:8px;padding:8px;font-size:13px;outline:none}
+input:focus{border-color:#e94560}
 </style>
 <script>setTimeout(()=>location.reload(),30000)</script>
 </head><body>
@@ -278,47 +261,95 @@ tr:hover td{background:#1f2d50}
 <div class="card"><h3>📢 Kanallar</h3><p>{{ total_channels }}</p></div>
 </div>
 
+<!-- Ijtimoiy tarmoqlar -->
+<h2>📱 Ijtimoiy Tarmoq Linklari</h2>
+<div class="section">
+<div class="row"><span style="color:#a0a0b0;min-width:90px;line-height:36px">📱 Telegram</span><input type="text" id="tg_link" value="{{ social.telegram }}"><button class="btn btn-green" onclick="saveLink('telegram','tg_link')">Saqlash</button></div>
+<div class="row"><span style="color:#a0a0b0;min-width:90px;line-height:36px">🎵 TikTok</span><input type="text" id="tt_link" value="{{ social.tiktok }}"><button class="btn btn-green" onclick="saveLink('tiktok','tt_link')">Saqlash</button></div>
+<div class="row"><span style="color:#a0a0b0;min-width:90px;line-height:36px">📸 Instagram</span><input type="text" id="ig_link" value="{{ social.instagram }}"><button class="btn btn-green" onclick="saveLink('instagram','ig_link')">Saqlash</button></div>
+<div class="row"><span style="color:#a0a0b0;min-width:90px;line-height:36px">▶️ YouTube</span><input type="text" id="yt_link" value="{{ social.youtube }}"><button class="btn btn-green" onclick="saveLink('youtube','yt_link')">Saqlash</button></div>
+</div>
+
+<!-- Kanallar -->
 <h2>📢 Majburiy Obuna Kanallar</h2>
+<div class="section">
 <div class="row">
-<input id="ch_id" placeholder="Kanal ID (-1001234567890)">
-<input id="ch_link" placeholder="https://t.me/kanal">
+<input type="text" id="ch_id" placeholder="Kanal ID (-1001234567890)">
+<input type="text" id="ch_link" placeholder="https://t.me/kanal">
+</div>
+<div class="row">
+<select id="ch_limit" onchange="toggleLimit()">
+<option value="none">♾️ Limitsiz</option>
+<option value="time">⏰ Vaqtli</option>
+<option value="subscribers">👥 Obuna sonli</option>
+</select>
+<input type="datetime-local" id="ch_time" style="display:none">
+<input type="number" id="ch_subs" placeholder="Necha obunagacha" style="display:none">
 <button class="btn" onclick="addChannel()">➕ Qo'shish</button>
 </div>
+</div>
+
 {% if channels %}
 <table>
-<tr><th>Kanal ID</th><th>Link</th><th>Bot holati</th><th>Obunalar</th><th></th></tr>
+<tr><th>Kanal ID</th><th>Link</th><th>Bot</th><th>Limit</th><th>Holat</th><th></th></tr>
 {% for ch_id, ch in channels %}
 <tr>
 <td><span class="code">{{ ch_id }}</span></td>
 <td><a href="{{ ch.link }}" style="color:#4fc3f7" target="_blank">{{ ch.link }}</a></td>
-<td>{% if ch.is_admin %}<span class="ok">✅ Admin</span>{% else %}<span class="no">❌ Admin emas</span>{% endif %}</td>
-<td><span class="badge">{{ ch.subscribers }}</span></td>
+<td>{% if ch.is_admin %}<span class="ok">✅</span>{% else %}<span class="no">❌</span>{% endif %}</td>
+<td>
+{% if ch.limit_type == 'none' %}♾️ Limitsiz
+{% elif ch.limit_type == 'time' %}⏰ {{ ch.limit_value }}
+{% elif ch.limit_type == 'subscribers' %}👥 {{ ch.limit_value }} ta
+{% endif %}
+</td>
+<td>{% if ch.active %}<span class="ok">✅ Faol</span>{% else %}<span class="warn">⏸ Tugagan</span>{% endif %}</td>
 <td><button class="btn btn-del" onclick="delChannel('{{ ch_id }}')">🗑</button></td>
 </tr>
 {% endfor %}
 </table>
 {% else %}<div class="empty">😴 Kanal qo'shilmagan</div>{% endif %}
 
+<!-- Kinolar -->
 <h2>🎬 Kinolar</h2>
 {% if movies %}
 <table>
 <tr><th>Kod</th><th>Nomi</th><th>Sana</th><th></th></tr>
 {% for code, m in movies %}
-<tr><td><span class="code">{{ code }}</span></td><td>{{ m.name }}</td><td>{{ m.date }}</td><td><button class="btn btn-del" onclick="delMovie('{{ code }}')">🗑</button></td></tr>
+<tr>
+<td><span class="code">{{ code }}</span></td>
+<td><input type="text" value="{{ m.name }}" id="mv_{{ code }}" style="background:transparent;border:none;color:#fff;width:150px"></td>
+<td>{{ m.date }}</td>
+<td>
+<button class="btn btn-green" onclick="renameMovie('{{ code }}')">✏️</button>
+<button class="btn btn-del" onclick="delMovie('{{ code }}')">🗑</button>
+</td>
+</tr>
 {% endfor %}
 </table>
 {% else %}<div class="empty">😴 Hali kino yo'q</div>{% endif %}
 
+<!-- Seryallar -->
 <h2>📺 Seryallar</h2>
 {% if serials %}
 <table>
 <tr><th>Kod</th><th>Nomi</th><th>Qismlar</th><th>Sana</th><th></th></tr>
 {% for code, s in serials %}
-<tr><td><span class="code">{{ code }}</span></td><td>{{ s.name }}</td><td><span class="badge">{{ s.episodes|length }}</span></td><td>{{ s.date }}</td><td><button class="btn btn-del" onclick="delSerial('{{ code }}')">🗑</button></td></tr>
+<tr>
+<td><span class="code">{{ code }}</span></td>
+<td><input type="text" value="{{ s.name }}" id="sr_{{ code }}" style="background:transparent;border:none;color:#fff;width:140px"></td>
+<td><span class="badge">{{ s.episodes|length }}</span></td>
+<td>{{ s.date }}</td>
+<td>
+<button class="btn btn-green" onclick="renameSerial('{{ code }}')">✏️</button>
+<button class="btn btn-del" onclick="delSerial('{{ code }}')">🗑</button>
+</td>
+</tr>
 {% endfor %}
 </table>
 {% else %}<div class="empty">😴 Hali serial yo'q</div>{% endif %}
 
+<!-- Foydalanuvchilar -->
 <h2>👥 Foydalanuvchilar</h2>
 {% if users %}
 <table>
@@ -330,34 +361,33 @@ tr:hover td{background:#1f2d50}
 {% else %}<div class="empty">😴 Hali hech kim yo'q</div>{% endif %}
 
 <script>
+function toggleLimit(){
+const v=document.getElementById('ch_limit').value;
+document.getElementById('ch_time').style.display=v==='time'?'block':'none';
+document.getElementById('ch_subs').style.display=v==='subscribers'?'block':'none';
+}
 function addChannel(){
 const id=document.getElementById('ch_id').value.trim();
 const link=document.getElementById('ch_link').value.trim();
+const lt=document.getElementById('ch_limit').value;
+let lv='';
+if(lt==='time')lv=document.getElementById('ch_time').value;
+if(lt==='subscribers')lv=document.getElementById('ch_subs').value;
 if(!id||!link)return alert('ID va linkni kiriting!');
-fetch('/add_channel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,link})})
+fetch('/add_channel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,link,limit_type:lt,limit_value:lv})})
 .then(r=>r.json()).then(d=>{if(d.ok)location.reload();else alert('Xato!')})
 }
-function delChannel(id){
-if(!confirm('Ochirasizmi?'))return;
-fetch('/del_channel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})})
-.then(r=>r.json()).then(d=>{if(d.ok)location.reload()})
-}
-function delMovie(code){
-if(!confirm('Kinoni ochirasizmi?'))return;
-fetch('/del_movie',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code})})
-.then(r=>r.json()).then(d=>{if(d.ok)location.reload()})
-}
-function delSerial(code){
-if(!confirm('Serialni ochirasizmi?'))return;
-fetch('/del_serial',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code})})
-.then(r=>r.json()).then(d=>{if(d.ok)location.reload()})
-}
+function delChannel(id){if(!confirm('Ochirasizmi?'))return;fetch('/del_channel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})}).then(r=>r.json()).then(d=>{if(d.ok)location.reload()})}
+function delMovie(code){if(!confirm('Kinoni ochirasizmi?'))return;fetch('/del_movie',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code})}).then(r=>r.json()).then(d=>{if(d.ok)location.reload()})}
+function delSerial(code){if(!confirm('Serialni ochirasizmi?'))return;fetch('/del_serial',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code})}).then(r=>r.json()).then(d=>{if(d.ok)location.reload()})}
+function renameMovie(code){const name=document.getElementById('mv_'+code).value;fetch('/rename_movie',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code,name})}).then(r=>r.json()).then(d=>{if(d.ok)alert('✅ Saqlandi!')})}
+function renameSerial(code){const name=document.getElementById('sr_'+code).value;fetch('/rename_serial',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code,name})}).then(r=>r.json()).then(d=>{if(d.ok)alert('✅ Saqlandi!')})}
+function saveLink(platform,inputId){const url=document.getElementById(inputId).value;fetch('/save_link',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({platform,url})}).then(r=>r.json()).then(d=>{if(d.ok)alert('✅ Saqlandi!')})}
 function logout(){fetch('/logout').then(()=>location.reload())}
 </script>
-</body></html>
-"""
+</body></html>"""
 
-# ── Flask routes ──────────────────────────────────────────────────────────────
+# ── Flask ─────────────────────────────────────────────────────────────────────
 flask_app = Flask(__name__)
 flask_app.secret_key = "rasuto_secret_2026"
 
@@ -365,17 +395,19 @@ flask_app.secret_key = "rasuto_secret_2026"
 def index():
     if not session.get("admin"):
         return render_template_string(LOGIN_HTML)
+    ch_list = []
+    for ch_id, ch in channels.items():
+        ch_copy = dict(ch)
+        ch_copy["active"] = is_channel_active(ch)
+        ch_list.append((ch_id, ch_copy))
     return render_template_string(
         ADMIN_HTML,
-        total_movies=len(movies),
-        total_serials=len(serials),
-        total_users=len(stats["users"]),
-        total_requests=stats["total_requests"],
-        total_channels=len(channels),
-        channels=list(channels.items()),
-        movies=list(movies.items()),
-        serials=list(serials.items()),
-        users=[(i+1, u) for i, u in enumerate(stats["users"].values())]
+        total_movies=len(movies), total_serials=len(serials),
+        total_users=len(stats["users"]), total_requests=stats["total_requests"],
+        total_channels=len(channels), channels=ch_list,
+        movies=list(movies.items()), serials=list(serials.items()),
+        users=[(i+1, u) for i, u in enumerate(stats["users"].values())],
+        social=SOCIAL_LINKS
     )
 
 @flask_app.route("/login", methods=["POST"])
@@ -392,11 +424,16 @@ def logout():
 
 @flask_app.route("/add_channel", methods=["POST"])
 def add_channel():
-    if not session.get("admin"):
-        return {"ok": False}
+    if not session.get("admin"): return {"ok": False}
     data = request.json
     ch_id = data.get("id")
-    channels[ch_id] = {"link": data.get("link"), "is_admin": False, "subscribers": 0}
+    channels[ch_id] = {
+        "link": data.get("link"),
+        "is_admin": False,
+        "subscribers": 0,
+        "limit_type": data.get("limit_type", "none"),
+        "limit_value": data.get("limit_value", "")
+    }
     if bot_instance and bot_loop:
         async def check():
             channels[ch_id]["is_admin"] = await check_admin(bot_instance, ch_id)
@@ -405,23 +442,44 @@ def add_channel():
 
 @flask_app.route("/del_channel", methods=["POST"])
 def del_channel():
-    if not session.get("admin"):
-        return {"ok": False}
+    if not session.get("admin"): return {"ok": False}
     channels.pop(request.json.get("id"), None)
     return {"ok": True}
 
 @flask_app.route("/del_movie", methods=["POST"])
 def del_movie():
-    if not session.get("admin"):
-        return {"ok": False}
+    if not session.get("admin"): return {"ok": False}
     movies.pop(request.json.get("code"), None)
     return {"ok": True}
 
 @flask_app.route("/del_serial", methods=["POST"])
 def del_serial():
-    if not session.get("admin"):
-        return {"ok": False}
+    if not session.get("admin"): return {"ok": False}
     serials.pop(request.json.get("code"), None)
+    return {"ok": True}
+
+@flask_app.route("/rename_movie", methods=["POST"])
+def rename_movie():
+    if not session.get("admin"): return {"ok": False}
+    data = request.json
+    if data["code"] in movies:
+        movies[data["code"]]["name"] = data["name"]
+    return {"ok": True}
+
+@flask_app.route("/rename_serial", methods=["POST"])
+def rename_serial():
+    if not session.get("admin"): return {"ok": False}
+    data = request.json
+    if data["code"] in serials:
+        serials[data["code"]]["name"] = data["name"]
+    return {"ok": True}
+
+@flask_app.route("/save_link", methods=["POST"])
+def save_link():
+    if not session.get("admin"): return {"ok": False}
+    data = request.json
+    if data["platform"] in SOCIAL_LINKS:
+        SOCIAL_LINKS[data["platform"]] = data["url"]
     return {"ok": True}
 
 @flask_app.route("/health")
@@ -437,7 +495,6 @@ def run_bot():
         bot_instance = bot_app.bot
         bot_app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
         bot_app.add_handler(MessageHandler(filters.TEXT, handle_message))
-        from telegram.ext import CallbackQueryHandler
         bot_app.add_handler(CallbackQueryHandler(handle_callback))
         print("Bot ishlamoqda... 🎬📺")
         await bot_app.initialize()
