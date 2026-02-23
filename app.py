@@ -29,6 +29,7 @@ channels = {}
 stats = {"users": {}, "total_requests": 0, "started": datetime.now().strftime("%Y-%m-%d %H:%M")}
 waiting_movie = {}
 waiting_serial = {}
+waiting_broadcast = {}
 bot_loop = None
 bot_instance = None
 
@@ -121,6 +122,22 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if text.lower() == "seryal":
             waiting_serial[user.id] = {"name": None, "episodes": [], "step": "name"}
             await update.message.reply_text("📺 Serial nomini yozing:")
+            return
+        if text.lower() == "yoz":
+            waiting_broadcast[user.id] = True
+            await update.message.reply_text("📣 Xabar matnini yuboring — hammaga yuboriladi:")
+            return
+        if user.id in waiting_broadcast:
+            del waiting_broadcast[user.id]
+            sent = 0
+            failed = 0
+            for uid in stats["users"]:
+                try:
+                    await ctx.bot.send_message(chat_id=int(uid), text=text)
+                    sent += 1
+                except:
+                    failed += 1
+            await update.message.reply_text(f"✅ Xabar yuborildi!\n\n📤 Yuborildi: {sent}\n❌ Xato: {failed}")
             return
         if text.lower() == "tugatish" and user.id in waiting_serial:
             ws = waiting_serial[user.id]
